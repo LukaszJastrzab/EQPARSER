@@ -21,9 +21,12 @@ public:
 	void init( std::vector< wchar_t > args, std::wstring equation );
 
 private:
-	std::wstring GetNewPhrase();
+	std::wstring get_new_phrase();
 
-	std::unique_ptr< functor< T > > m_functor;
+	template< typename F >
+	bool handle_function( std::wstring& in, const std::wstring& name, const std::wstring& arg );
+
+	std::shared_ptr< functor< T > > m_functor;
 
 	std::vector< std::wstring > bracer( std::wstring& in );
 
@@ -32,7 +35,7 @@ private:
 
 	int m_id_item{ 0 };
 	const std::wstring m_id_prefix{ L"fpfx" };
-	std::map< int, std::unique_ptr< functor< T > > > m_items;
+	std::map< int, std::shared_ptr< functor< T > > > m_items;
 };
 
 template< typename T >
@@ -47,7 +50,7 @@ class f_mult : public functor< T >
 {
 public:
 	virtual T operator()() override { return ( *arg1 )() * ( *arg2() ); };
-	std::unique_ptr< functor< T > > arg1, arg2;
+	std::shared_ptr< functor< T > > arg1, arg2;
 };
 
 template< typename T >
@@ -55,7 +58,7 @@ class f_add : public functor< T >
 {
 public:
 	virtual T operator()() override { return  ( *arg1 )() + ( *arg2() ); };
-	std::unique_ptr< functor< T > > arg1, arg2;
+	std::shared_ptr< functor< T > > arg1, arg2;
 };
 
 template< typename T >
@@ -63,7 +66,7 @@ class f_brac : public functor< T >
 {
 public:
 	virtual T operator()() override { return  ( *arg )(); };
-	std::unique_ptr< functor< T > > arg;
+	std::shared_ptr< functor< T > > arg;
 };
 
 template< typename T >
@@ -71,7 +74,7 @@ class f_sin : public functor< T >
 {
 public:
 	virtual T operator()() override { return std::sin( ( *arg )() ); };
-	std::unique_ptr< functor< T > > arg;
+	std::shared_ptr< functor< T > > arg;
 };
 
 
@@ -93,9 +96,30 @@ void eq_parser< T >::init( std::vector< wchar_t > args, std::wstring equation )
 }
 
 template< typename T >
-std::wstring eq_parser< T >::GetNewPhrase()
+std::wstring eq_parser< T >::get_new_phrase()
 {
 	return m_id_prefix + std::to_wstring( m_id_item );
+}
+
+template< typename T >
+template< typename F >
+bool eq_parser< T >::handle_function( std::wstring& in, const std::wstring& name, const std::wstring& arg )
+{
+	std::wstringstream new_item;
+	new_item << name << L"(" << arg << L")";
+
+	size_t pos = in.find( new_item.str() );
+
+	if( pos == std::wstring::npos )
+		return false;
+
+	in.replace( pos, new_item.str().length(), get_new_phrase() );
+
+	m_items[ m_id_item ] = std::make_shared< F >();
+
+	++m_id_item;
+
+	return true;
 }
 
 template< typename T >
@@ -124,21 +148,13 @@ std::vector< std::wstring > eq_parser< T >::bracer( std::wstring& in )
 			++open_counter;
 	}
 
-	std::wstring new_item;
-	size_t pos;
-
 	for( auto& item : out )
 	{
-		new_item = L"sin(" + item + L")";
-		pos = in.find( new_item );
-
-		if( pos != std::wstring::npos )
-		{
-			in.replace( pos, new_item.length(), GetNewPhrase() );
-			m_items[ m_id_item ] = std::make_unique< f_sin< T > >();
-			++m_id_item;
+		if( handle_function< f_sin< T > >( in, L"sin", item ) )
 			continue;
-		}
+
+		if( !handle_function< f_brac< T > >( in, L"", item ) )
+			throw std::runtime_error( "eq_parser::bracer - brac failed" );
 	}
 
 	return out;
