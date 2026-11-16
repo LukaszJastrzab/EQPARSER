@@ -19,7 +19,7 @@ protected:
 		EXPECT_TRUE( true );
 	}
 
-	eq_parser parser;
+	eq_parser< double > parser;
 	vector< wchar_t > args;
 	wstring equation;
 };
