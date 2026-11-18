@@ -16,7 +16,7 @@ template< typename T >
 class eq_parser
 {
 public:
-	eq_parser() = default;
+	eq_parser();
 	eq_parser( std::vector< wchar_t > args, std::wstring equation );
 	void init( std::vector< wchar_t > args, std::wstring equation );
 
@@ -25,16 +25,19 @@ private:
 
 	template< typename F >
 	bool handle_function( std::wstring& in, const std::wstring& name, const std::wstring& arg );
+	std::shared_ptr< functor< T > > handle_item( const std::wstring& in );
 
 	std::shared_ptr< functor< T > > m_functor;
 
-	std::vector< std::wstring > bracer( std::wstring& in );
+	void bracer( std::wstring& in );
+	bool algebrer( std::wstring& in );
 
 	std::vector< wchar_t > m_args;
 	std::wstring m_equation;
 
 	int m_id_item{ 0 };
 	const std::wstring m_id_prefix{ L"fpfx" };
+	const std::wregex m_id_prefix_rgx;
 	std::map< int, std::shared_ptr< functor< T > > > m_items;
 };
 
@@ -42,44 +45,86 @@ template< typename T >
 class functor
 {
 public:
-	virtual T operator()() = 0;
+	virtual T operator()( const std::vector< T >& vars ) = 0;
+	std::shared_ptr< functor< T > > arg1;
 };
 
 template< typename T >
-class f_mult : public functor< T >
+class functor2 : public functor< T >
 {
 public:
-	virtual T operator()() override { return ( *arg1 )() * ( *arg2() ); };
-	std::shared_ptr< functor< T > > arg1, arg2;
+	std::shared_ptr< functor< T > > arg2;
 };
 
 template< typename T >
-class f_add : public functor< T >
+class f_const final : public functor< T >
 {
 public:
-	virtual T operator()() override { return  ( *arg1 )() + ( *arg2() ); };
-	std::shared_ptr< functor< T > > arg1, arg2;
+	f_const( T _value ) : value( _value ) {}
+	T operator()( const std::vector< T >& vars ) override { return value; };
+	T value{};
 };
 
 template< typename T >
-class f_brac : public functor< T >
+class f_var final : public functor< T >
 {
 public:
-	virtual T operator()() override { return  ( *arg )(); };
-	std::shared_ptr< functor< T > > arg;
+	f_var( uint8_t _var_idx ) : var_idx( _var_idx ) {}
+	T operator()( const std::vector< T >& vars ) override { return vars[ var_idx ]; };
+	uint8_t var_idx{};
 };
 
 template< typename T >
-class f_sin : public functor< T >
+class f_mult final : public functor2< T >
 {
 public:
-	virtual T operator()() override { return std::sin( ( *arg )() ); };
-	std::shared_ptr< functor< T > > arg;
+	T operator()( const std::vector< T >& vars ) override { return ( *arg1 )( vars ) * ( *arg2 )( vars ); };
 };
 
+template< typename T >
+class f_div final : public functor2< T >
+{
+public:
+	T operator()( const std::vector< T >& vars ) override { return ( *arg1 )( vars ) / ( *arg2 )( vars ); };
+};
+
+template< typename T >
+class f_add final : public functor2< T >
+{
+public:
+	T operator()( const std::vector< T >& vars ) override { return  ( *arg1 )( vars ) + ( *arg2 )( vars ); };
+};
+
+template< typename T >
+class f_sub final : public functor2< T >
+{
+public:
+	T operator()( const std::vector< T >& vars ) override { return  ( *arg1 )( vars ) - ( *arg2 )( vars ); };
+};
+
+template< typename T >
+class f_brac final : public functor< T >
+{
+public:
+	T operator()( const std::vector< T >& vars ) override { return  ( *arg1 )( vars ); };
+};
+
+template< typename T >
+class f_sin final : public functor< T >
+{
+public:
+	T operator()( const std::vector< T >& vars ) override { return std::sin( ( *arg1 )( vars ) ); };
+};
+
+template< typename T >
+eq_parser< T >::eq_parser( )
+	: m_id_prefix_rgx( m_id_prefix + LR"(([0-9]+))" )
+{
+}
 
 template< typename T >
 eq_parser< T >::eq_parser( std::vector< wchar_t > args, std::wstring equation )
+	: eq_parser()
 {
 	init( args, equation );
 }
@@ -92,7 +137,8 @@ void eq_parser< T >::init( std::vector< wchar_t > args, std::wstring equation )
 
 	m_equation = std::regex_replace( m_equation, std::wregex( L"\\s+" ), L"" );
 
-	auto braces = bracer( m_equation );
+	bracer( m_equation );
+	algebrer( m_equation );
 }
 
 template< typename T >
@@ -117,13 +163,15 @@ bool eq_parser< T >::handle_function( std::wstring& in, const std::wstring& name
 
 	m_items[ m_id_item ] = std::make_shared< F >();
 
+	//auto& new_functor = m_items[ m_id_item ];
+
 	++m_id_item;
 
 	return true;
 }
 
 template< typename T >
-std::vector< std::wstring > eq_parser< T >::bracer( std::wstring& in )
+void eq_parser< T >::bracer( std::wstring& in )
 {
 	int open_counter{ 0 };
 	std::vector< std::wstring > out;
@@ -156,6 +204,81 @@ std::vector< std::wstring > eq_parser< T >::bracer( std::wstring& in )
 		if( !handle_function< f_brac< T > >( in, L"", item ) )
 			throw std::runtime_error( "eq_parser::bracer - brac failed" );
 	}
+}
 
-	return out;
+static const std::wregex number_rgx( LR"(([0-9]+(?:\.[0-9]+)?))" );
+
+template< typename T >
+std::shared_ptr< functor< T > > eq_parser< T >::handle_item( const std::wstring& in )
+{
+	std::wsmatch match;
+
+	if( std::regex_search( in, match, m_id_prefix_rgx ) )
+	{
+		auto functorId = std::stoi( match[ 1 ].str() );
+		return m_items.find( functorId )->second;
+	}
+
+	if( std::regex_search( in, match, number_rgx ) )
+	{
+		auto const_val = static_cast< T >( std::stod( match[ 1 ].str() ) );
+		return std::make_shared< f_const< T > >( const_val );
+	}
+
+	for( uint8_t idx{ 0 }; idx < m_args.size(); ++idx )
+		if( in.size() == 1 && in[ 0 ] == m_args[ idx ] )
+			return std::make_shared< f_var< T > >( idx );
+
+	throw std::runtime_error( "eq_parser< T >::handle_item - no match" );
+}
+
+static const std::wregex multdiv_rgx(
+	LR"(([a-zA-Z0-9_]+(?:\.[0-9]+)?)([*/])([a-zA-Z0-9_]+(?:\.[0-9]+)?))"
+);
+static const std::wregex addsub_rgx(
+	LR"(([a-zA-Z0-9_]+(?:\.[0-9]+)?)([+-])([a-zA-Z0-9_]+(?:\.[0-9]+)?))"
+);
+
+template< typename T >
+bool eq_parser< T >::algebrer( std::wstring& in )
+{
+	bool operation_found{ false };
+	std::wsmatch match;
+	std::shared_ptr< functor2< T > > alg_op;
+
+	if( std::regex_search( in, match, multdiv_rgx ) )
+	{
+		if( match[ 2 ].str() == L"*" )
+			alg_op = std::make_shared< f_mult< T > >();
+		else
+			alg_op = std::make_shared< f_div< T > >();
+
+		alg_op->arg1 = handle_item( match[ 1 ].str() );
+		alg_op->arg2 = handle_item( match[ 3 ].str() );
+
+		operation_found = true;
+	}
+	else if ( std::regex_search( in, match, addsub_rgx ) )
+	{
+		if( match[ 2 ].str() == L"+" )
+			alg_op = std::make_shared< f_add< T > >();
+		else
+			alg_op = std::make_shared< f_sub< T > >();
+
+		alg_op->arg1 = handle_item( match[ 1 ].str() );
+		alg_op->arg2 = handle_item( match[ 3 ].str() );
+
+		operation_found = true;
+	}
+
+
+
+	// to do sub in m_items and in in
+
+	// test
+	if( operation_found )
+		auto asdf = match[ 0 ].str();
+	// test
+
+	return false;
 }
