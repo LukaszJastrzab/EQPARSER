@@ -16,6 +16,10 @@ protected:
 	void TearDown() override
 	{
 		parser.init( args, equation );
+
+		auto t1 = parser( { 1.2, 2.4 } );
+		auto t2 = 1.2 + 2.4 * sin( 1.2 * 2.4 ) + ( ( 1.2 + 2.4 ) * 2 );
+
 		EXPECT_TRUE( true );
 	}
 

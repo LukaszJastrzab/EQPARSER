@@ -20,17 +20,20 @@ public:
 	eq_parser( std::vector< wchar_t > args, std::wstring equation );
 	void init( std::vector< wchar_t > args, std::wstring equation );
 
+	T operator()( const std::vector< T >& vars );
+
 private:
 	std::wstring get_new_phrase();
 
 	template< typename F >
-	bool handle_function( std::wstring& in, const std::wstring& name, const std::wstring& arg );
+	bool handle_function( std::wstring& in, const std::wstring& name, std::wstring& arg );
 	std::shared_ptr< functor< T > > handle_item( const std::wstring& in );
-
-	std::shared_ptr< functor< T > > m_functor;
 
 	void bracer( std::wstring& in );
 	bool algebrer( std::wstring& in );
+
+private:
+	std::shared_ptr< functor< T > > m_functor;
 
 	std::vector< wchar_t > m_args;
 	std::wstring m_equation;
@@ -133,12 +136,20 @@ template< typename T >
 void eq_parser< T >::init( std::vector< wchar_t > args, std::wstring equation )
 {
 	m_args = args,
+
+	equation = std::regex_replace( equation, std::wregex( L"\\s+" ), L"" );
+
 	m_equation = equation;
 
-	m_equation = std::regex_replace( m_equation, std::wregex( L"\\s+" ), L"" );
+	bracer( equation );
+	while( algebrer( equation ) ){};
+	m_functor = handle_item( equation );
+}
 
-	bracer( m_equation );
-	algebrer( m_equation );
+template< typename T >
+T eq_parser< T >::operator()( const std::vector< T >& vars )
+{
+	return ( *m_functor )( vars );
 }
 
 template< typename T >
@@ -149,7 +160,7 @@ std::wstring eq_parser< T >::get_new_phrase()
 
 template< typename T >
 template< typename F >
-bool eq_parser< T >::handle_function( std::wstring& in, const std::wstring& name, const std::wstring& arg )
+bool eq_parser< T >::handle_function( std::wstring& in, const std::wstring& name, std::wstring& arg )
 {
 	std::wstringstream new_item;
 	new_item << name << L"(" << arg << L")";
@@ -163,9 +174,13 @@ bool eq_parser< T >::handle_function( std::wstring& in, const std::wstring& name
 
 	m_items[ m_id_item ] = std::make_shared< F >();
 
-	//auto& new_functor = m_items[ m_id_item ];
+	auto& f_functor = m_items[ m_id_item ];
 
 	++m_id_item;
+
+	bracer( arg );
+	while( algebrer( arg ) ) {};
+	f_functor->arg1 = handle_item( arg );
 
 	return true;
 }
@@ -271,14 +286,21 @@ bool eq_parser< T >::algebrer( std::wstring& in )
 		operation_found = true;
 	}
 
-
-
-	// to do sub in m_items and in in
-
-	// test
 	if( operation_found )
-		auto asdf = match[ 0 ].str();
-	// test
+	{
+		size_t pos = in.find( match[ 0 ].str() );
+
+		if( pos == std::wstring::npos )
+			throw std::runtime_error( "eq_parser< T >::algebrer - smth went wrong" );
+
+		in.replace( pos, match[ 0 ].str().length(), get_new_phrase() );
+
+		m_items[ m_id_item ] = alg_op;
+
+		++m_id_item;
+
+		return true;
+	}
 
 	return false;
 }
