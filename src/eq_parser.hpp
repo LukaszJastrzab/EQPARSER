@@ -27,10 +27,10 @@ private:
 
 	template< typename F >
 	bool handle_function( std::wstring& in, const std::wstring& name, std::wstring& arg );
-	std::shared_ptr< functor< T > > handle_item( const std::wstring& in );
+	std::shared_ptr< functor< T > > handle_item( std::wstring& in );
 
-	void bracer( std::wstring& in );
-	bool algebrer( std::wstring& in );
+	void handle_braces( std::wstring& in );
+	bool handle_algebra( std::wstring& in );
 
 private:
 	std::shared_ptr< functor< T > > m_functor;
@@ -78,6 +78,13 @@ public:
 };
 
 template< typename T >
+class f_neg final : public functor< T >
+{
+public:
+	T operator()( const std::vector< T >& vars ) override { return -( *arg1 )( vars ); };
+};
+
+template< typename T >
 class f_mult final : public functor2< T >
 {
 public:
@@ -120,6 +127,13 @@ public:
 };
 
 template< typename T >
+class f_cos final : public functor< T >
+{
+public:
+	T operator()( const std::vector< T >& vars ) override { return std::cos( ( *arg1 )( vars ) ); };
+};
+
+template< typename T >
 eq_parser< T >::eq_parser( )
 	: m_id_prefix_rgx( m_id_prefix + LR"(([0-9]+))" )
 {
@@ -137,12 +151,14 @@ void eq_parser< T >::init( std::vector< wchar_t > args, std::wstring equation )
 {
 	m_args = args,
 
-	equation = std::regex_replace( equation, std::wregex( L"\\s+" ), L"" );
-
 	m_equation = equation;
 
-	bracer( equation );
-	while( algebrer( equation ) ){};
+	equation = std::regex_replace( equation, std::wregex( L"\\s+" ), L"" );
+	equation = std::regex_replace( equation, std::wregex( L"\\+-" ), L"-" );
+	equation = std::regex_replace( equation, std::wregex( L"--" ), L"-" );
+
+	handle_braces( equation );
+	while( handle_algebra( equation ) ){};
 	m_functor = handle_item( equation );
 }
 
@@ -178,15 +194,15 @@ bool eq_parser< T >::handle_function( std::wstring& in, const std::wstring& name
 
 	++m_id_item;
 
-	bracer( arg );
-	while( algebrer( arg ) ) {};
+	handle_braces( arg );
+	while( handle_algebra( arg ) ) {};
 	f_functor->arg1 = handle_item( arg );
 
 	return true;
 }
 
 template< typename T >
-void eq_parser< T >::bracer( std::wstring& in )
+void eq_parser< T >::handle_braces( std::wstring& in )
 {
 	int open_counter{ 0 };
 	std::vector< std::wstring > out;
@@ -216,6 +232,9 @@ void eq_parser< T >::bracer( std::wstring& in )
 		if( handle_function< f_sin< T > >( in, L"sin", item ) )
 			continue;
 
+		if( handle_function< f_cos< T > >( in, L"cos", item ) )
+			continue;
+
 		if( !handle_function< f_brac< T > >( in, L"", item ) )
 			throw std::runtime_error( "eq_parser::bracer - brac failed" );
 	}
@@ -224,38 +243,55 @@ void eq_parser< T >::bracer( std::wstring& in )
 static const std::wregex number_rgx( LR"(([0-9]+(?:\.[0-9]+)?))" );
 
 template< typename T >
-std::shared_ptr< functor< T > > eq_parser< T >::handle_item( const std::wstring& in )
+std::shared_ptr< functor< T > > eq_parser< T >::handle_item( std::wstring& in )
 {
 	std::wsmatch match;
+	bool neg{ false };
+	std::shared_ptr< functor< T > > result;
+
+	if( in[ 0 ] == '-' )
+	{
+		neg = true;
+		in.erase( 0, 1 );
+	}
 
 	if( std::regex_search( in, match, m_id_prefix_rgx ) )
 	{
 		auto functorId = std::stoi( match[ 1 ].str() );
-		return m_items.find( functorId )->second;
+		result = m_items.find( functorId )->second;
 	}
-
-	if( std::regex_search( in, match, number_rgx ) )
+	else if( std::regex_search( in, match, number_rgx ) )
 	{
 		auto const_val = static_cast< T >( std::stod( match[ 1 ].str() ) );
-		return std::make_shared< f_const< T > >( const_val );
+		result = std::make_shared< f_const< T > >( const_val );
+	}
+	else
+	{
+		for( uint8_t idx{ 0 }; idx < m_args.size(); ++idx )
+			if( in.size() == 1 && in[ 0 ] == m_args[ idx ] )
+				result = std::make_shared< f_var< T > >( idx );
 	}
 
-	for( uint8_t idx{ 0 }; idx < m_args.size(); ++idx )
-		if( in.size() == 1 && in[ 0 ] == m_args[ idx ] )
-			return std::make_shared< f_var< T > >( idx );
-
-	throw std::runtime_error( "eq_parser< T >::handle_item - no match" );
+	if( neg )
+	{
+		auto nresult = std::make_shared< f_neg< T > >();
+		nresult->arg1 = result;
+		return nresult;
+	}
+	else
+		return result;
 }
 
 static const std::wregex multdiv_rgx(
-	LR"(([a-zA-Z0-9_]+(?:\.[0-9]+)?)([*/])([a-zA-Z0-9_]+(?:\.[0-9]+)?))"
+	LR"(([a-zA-Z0-9_]+(?:\.[0-9]+)?)([*/])(-?[a-zA-Z0-9_]+(?:\.[0-9]+)?))"
 );
+
 static const std::wregex addsub_rgx(
-	LR"(([a-zA-Z0-9_]+(?:\.[0-9]+)?)([+-])([a-zA-Z0-9_]+(?:\.[0-9]+)?))"
+	LR"((-?[a-zA-Z0-9_]+(?:\.[0-9]+)?)([+-])([a-zA-Z0-9_]+(?:\.[0-9]+)?))"
 );
 
 template< typename T >
-bool eq_parser< T >::algebrer( std::wstring& in )
+bool eq_parser< T >::handle_algebra( std::wstring& in )
 {
 	bool operation_found{ false };
 	std::wsmatch match;
